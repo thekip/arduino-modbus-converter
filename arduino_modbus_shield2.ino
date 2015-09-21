@@ -86,6 +86,7 @@ double PID_KP, PID_KI, PID_KD;
 int foo = fetchModbusSettings();
 int bar = fetchPidSettings();
 
+int PID_DISABLED_SETPOINT_VALUE = -32767;
 double PID_CURRENT_SETPOINT = PID_DEFAULT_SETPOINT;
 
 PID pid(&pidInput, &pidOuptut, &PID_CURRENT_SETPOINT, PID_KP, PID_KI, PID_KD, DIRECT);
@@ -112,7 +113,7 @@ unsigned int holdingRegs[HOLDING_REGS_SIZE] = {
 void setup() {
   Serial.begin(9600);
   startModbus();
-  startPid();
+  togglePid();
 }
 
 void startModbus(){
@@ -128,18 +129,24 @@ void startModbus(){
   modbus_configure(&Serial3, BAUDRATES[CURRENT_BAUDRATE], SERIAL_8N2, CURRENT_SLAVE_ID, TX_PIN, HOLDING_REGS_SIZE, holdingRegs);
 }
 
-void startPid(){
+void togglePid(){
   //turn the PID on
-  pid.SetMode(AUTOMATIC);
-  Serial.print("PID Started. ");
-  Serial.print("Default setpoint: ");
-  Serial.print(PID_DEFAULT_SETPOINT);
-  Serial.print(" Kp: ");
-  Serial.print(PID_KP);
-  Serial.print(" Ki: ");
-  Serial.print(PID_KI);
-  Serial.print(" Kd: ");
-  Serial.println(PID_KD);
+  if ((int)PID_CURRENT_SETPOINT != (int)PID_DISABLED_SETPOINT_VALUE) {
+    pid.SetMode(AUTOMATIC);
+    Serial.print("PID Started. ");
+    Serial.print("Default setpoint: ");
+    Serial.print(PID_DEFAULT_SETPOINT);
+    Serial.print(" Kp: ");
+    Serial.print(PID_KP);
+    Serial.print(" Ki: ");
+    Serial.print(PID_KI);
+    Serial.print(" Kd: ");
+    Serial.println(PID_KD);
+  } else {
+    pid.SetMode(MANUAL);
+    Serial.print("PID Stopped. Because setpoint is: ");
+    Serial.println(PID_CURRENT_SETPOINT);
+  }
 }
 
 void loop() {
@@ -159,7 +166,11 @@ void loop() {
 }
 
 void updatePid() {
-  PID_CURRENT_SETPOINT = holdingRegs[PID_CURRENT_SETPOINT_REG];
+  if (holdingRegs[PID_CURRENT_SETPOINT_REG] != (int) PID_CURRENT_SETPOINT) {
+     PID_CURRENT_SETPOINT = holdingRegs[PID_CURRENT_SETPOINT_REG];
+     togglePid();
+  }
+ 
   pidInput = analogRead(PID_INPUT_PIN);
   holdingRegs[PID_INPUT_REG] = pidInput;
   pid.Compute();
@@ -242,7 +253,7 @@ void savePidSettings(double defaultSetpoint, double kp, double ki, double kd) {
 
 
 int fetchPidSettings(){
-  PID_DEFAULT_SETPOINT = readIntFromEEPROM(PID_DEFAULT_SETPOINT_EEPROM_HIGH_ADDR, 0);
+  PID_DEFAULT_SETPOINT = readIntFromEEPROM(PID_DEFAULT_SETPOINT_EEPROM_HIGH_ADDR, PID_DISABLED_SETPOINT_VALUE);
   PID_KP = readIntFromEEPROM(PID_KP_EEPROM_HIGH_ADDR, 10) / 10;
   PID_KI = readIntFromEEPROM(PID_KI_EEPROM_HIGH_ADDR, 10) / 10;
   PID_KD = readIntFromEEPROM(PID_KD_EEPROM_HIGH_ADDR, 10) / 10;
