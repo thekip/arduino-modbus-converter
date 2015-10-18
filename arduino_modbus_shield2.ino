@@ -1,5 +1,5 @@
+#include <AnalogSmooth.h>
 #include <PID_v1.h>
-
 #include <EEPROM.h>
 #include <SimpleModbusSlave.h>
 
@@ -54,6 +54,7 @@ enum
   BAUDRATE_REG,
   SLAVE_ID_REG,
 
+  PID_OUTPUT_REG,
   HOLDING_REGS_SIZE
 };
 
@@ -89,7 +90,8 @@ int bar = fetchPidSettings();
 int PID_DISABLED_SETPOINT_VALUE = -32767;
 double PID_CURRENT_SETPOINT = PID_DEFAULT_SETPOINT;
 
-PID pid(&pidInput, &pidOuptut, &PID_CURRENT_SETPOINT, PID_KP, PID_KI, PID_KD, DIRECT);
+PID pid(&pidInput, &pidOuptut, &PID_CURRENT_SETPOINT,  getKp(),  getKi(),  getKd(), DIRECT);
+AnalogSmooth as = AnalogSmooth(20);
 
 // data array for modbus network sharing
 unsigned int holdingRegs[HOLDING_REGS_SIZE] = {
@@ -107,10 +109,13 @@ unsigned int holdingRegs[HOLDING_REGS_SIZE] = {
   PID_KD,
   
   CURRENT_BAUDRATE,
-  CURRENT_SLAVE_ID
+  CURRENT_SLAVE_ID,
+
+  pidOuptut
 };
 
 void setup() {
+  //resetEeprom();
   Serial.begin(9600);
   startModbus();
   togglePid();
@@ -128,25 +133,42 @@ void startModbus(){
   
   modbus_configure(&Serial3, BAUDRATES[CURRENT_BAUDRATE], SERIAL_8N2, CURRENT_SLAVE_ID, TX_PIN, HOLDING_REGS_SIZE, holdingRegs);
 }
+double getKp() {
+  return PID_KP / 10.0;
+}
+
+double getKi(){
+  return PID_KI / 10.0;
+}
+
+double getKd() {
+  return PID_KD / 10.0;
+}
 
 void togglePid(){
   //turn the PID on
   if ((int)PID_CURRENT_SETPOINT != (int)PID_DISABLED_SETPOINT_VALUE) {
     pid.SetMode(AUTOMATIC);
+   // pid.SetOutputLimits(1, 10);
+    pid.SetSampleTime(800);
     Serial.print("PID Started. ");
     Serial.print("Default setpoint: ");
     Serial.print(PID_DEFAULT_SETPOINT);
-    Serial.print(" Kp: ");
-    Serial.print(PID_KP);
-    Serial.print(" Ki: ");
-    Serial.print(PID_KI);
-    Serial.print(" Kd: ");
-    Serial.println(PID_KD);
+    printPidTunings();
   } else {
     pid.SetMode(MANUAL);
     Serial.print("PID Stopped. Because setpoint is: ");
     Serial.println(PID_CURRENT_SETPOINT);
   }
+}
+
+void printPidTunings(){
+      Serial.print(" Kp: ");
+    Serial.print(getKp());
+    Serial.print(" Ki: ");
+    Serial.print(getKi());
+    Serial.print(" Kd: ");
+    Serial.println(getKd());
 }
 
 void loop() {
@@ -170,11 +192,21 @@ void updatePid() {
      PID_CURRENT_SETPOINT = holdingRegs[PID_CURRENT_SETPOINT_REG];
      togglePid();
   }
- 
-  pidInput = analogRead(PID_INPUT_PIN);
+
+  
+  pidInput = as.smooth(analogRead(PID_INPUT_PIN));
   holdingRegs[PID_INPUT_REG] = pidInput;
   pid.Compute();
-  analogWrite(PID_OUTPUT_PIN, pidOuptut);
+ // int out = map(pidOuptut, 0, 10, 0, 240);
+ int out = map(pidOuptut, 0, 255, 24, 240);
+ holdingRegs[PID_OUTPUT_REG] = out;
+  analogWrite(PID_OUTPUT_PIN, out);
+}
+
+void resetEeprom(){
+for (int i = 0 ; i < EEPROM.length() ; i++) {
+    EEPROM.write(i, 255);
+  }  
 }
 
 void watchModbusSettings() {
@@ -193,9 +225,11 @@ void watchPidSettings(){
   if (holdingRegs[PID_KP_REG] !=  PID_KP || holdingRegs[PID_KI_REG] != PID_KI  ||  holdingRegs[PID_KD_REG] != PID_KD ||
     holdingRegs[PID_DEFAULT_SETPOINT_REG] != PID_DEFAULT_SETPOINT)
    {
-    
       savePidSettings(holdingRegs[PID_DEFAULT_SETPOINT_REG], holdingRegs[PID_KP_REG], holdingRegs[PID_KI_REG],  holdingRegs[PID_KD_REG]);
-      pid.SetTunings(PID_KP, PID_KI, PID_KD);
+      Serial.print(" Update pid tunings: ");
+      printPidTunings();
+      
+      pid.SetTunings(getKp(), getKi(), getKd());
    }
 }
 
@@ -241,22 +275,19 @@ int readIntFromEEPROM(int startAddress, int substitute){
 
 void savePidSettings(double defaultSetpoint, double kp, double ki, double kd) {
   saveIntToEEPROM(defaultSetpoint, PID_DEFAULT_SETPOINT_EEPROM_HIGH_ADDR);
-  saveIntToEEPROM(kp*10, PID_KP_EEPROM_HIGH_ADDR);
-  saveIntToEEPROM(ki*10, PID_KI_EEPROM_HIGH_ADDR);
-  saveIntToEEPROM(kd*10, PID_KD_EEPROM_HIGH_ADDR);
+  saveIntToEEPROM(kp, PID_KP_EEPROM_HIGH_ADDR);
+  saveIntToEEPROM(ki, PID_KI_EEPROM_HIGH_ADDR);
+  saveIntToEEPROM(kd, PID_KD_EEPROM_HIGH_ADDR);
   
-  PID_DEFAULT_SETPOINT = defaultSetpoint;
-  PID_KP = kp;
-  PID_KI = ki;
-  PID_KD = kd;
+  fetchPidSettings();
 }
 
 
 int fetchPidSettings(){
   PID_DEFAULT_SETPOINT = readIntFromEEPROM(PID_DEFAULT_SETPOINT_EEPROM_HIGH_ADDR, PID_DISABLED_SETPOINT_VALUE);
-  PID_KP = readIntFromEEPROM(PID_KP_EEPROM_HIGH_ADDR, 10) / 10;
-  PID_KI = readIntFromEEPROM(PID_KI_EEPROM_HIGH_ADDR, 10) / 10;
-  PID_KD = readIntFromEEPROM(PID_KD_EEPROM_HIGH_ADDR, 10) / 10;
+  PID_KP = readIntFromEEPROM(PID_KP_EEPROM_HIGH_ADDR, 10);
+  PID_KI = readIntFromEEPROM(PID_KI_EEPROM_HIGH_ADDR, 10);
+  PID_KD = readIntFromEEPROM(PID_KD_EEPROM_HIGH_ADDR, 10);
   
   return 0;
 }
